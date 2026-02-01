@@ -16,7 +16,8 @@
 - 📦 **Poetry 依賴管理**：使用 Poetry 管理 Python 套件
 - 🤖 **XGBoost 整合**：展示 XGBoost 模型訓練與 MLflow 自動記錄
 - 📊 **實驗追蹤**：自動記錄模型參數、指標和 artifacts
-- 💾 **本地儲存**：使用 SQLite 和本地檔案系統儲存實驗資料
+- 💾 **雙資料庫支援**：支援 SQLite（開發）和 PostgreSQL（生產）兩種模式
+- 🔧 **完全自包含**：包含 PostgreSQL 資料庫，無需外部依賴
 
 ## 🛠️ 技術棧
 
@@ -30,14 +31,21 @@
 
 ```
 mlflow-docker-simple/
-├── docker-compose.yml      # MLflow 伺服器配置
+├── mlflow_server/          # MLflow Server Dockerfile
+│   └── Dockerfile          # 包含 PostgreSQL 驅動的 MLflow 映像檔
+├── docker-compose.yml      # MLflow 伺服器配置（支援 SQLite/PostgreSQL）
 ├── pyproject.toml          # Poetry 依賴配置
 ├── poetry.lock             # 鎖定的依賴版本
 ├── train.py                # XGBoost 訓練腳本
 ├── main.py                 # 主程式（範例）
+├── run_sqlite.sh           # 啟動 SQLite 版本的腳本（Linux/Mac）
+├── run_postgresql.sh       # 啟動 PostgreSQL 版本的腳本（Linux/Mac）
+├── run_sqlite.ps1          # 啟動 SQLite 版本的腳本（Windows）
+├── run_postgresql.ps1      # 啟動 PostgreSQL 版本的腳本（Windows）
 ├── mlflow_data/            # MLflow 資料目錄
 │   ├── artifacts/          # 模型 artifacts
-│   └── mlflow.db           # SQLite 資料庫
+│   └── mlflow.db           # SQLite 資料庫（SQLite 模式使用）
+├── .gitignore              # Git 忽略檔案
 └── README.md               # 專案說明文件
 ```
 
@@ -62,9 +70,26 @@ mlflow-docker-simple/
    poetry install
    ```
 
-3. **啟動 MLflow 伺服器**：
+3. **啟動 MLflow 伺服器**（選擇一種模式）：
+
+   **SQLite 模式（適合開發測試）**：
    ```bash
-   docker-compose up -d
+   # Windows
+   .\run_sqlite.ps1
+   
+   # Linux/Mac
+   chmod +x run_sqlite.sh
+   ./run_sqlite.sh
+   ```
+
+   **PostgreSQL 模式（適合生產環境）**：
+   ```bash
+   # Windows
+   .\run_postgresql.ps1
+   
+   # Linux/Mac
+   chmod +x run_postgresql.sh
+   ./run_postgresql.sh
    ```
 
 4. **執行訓練腳本**：
@@ -77,17 +102,59 @@ mlflow-docker-simple/
 
 ## 📖 使用說明
 
+### 選擇資料庫模式
+
+本專案支援兩種資料庫模式：
+
+- **SQLite 模式**：適合開發和測試，無需額外資料庫服務，啟動快速
+- **PostgreSQL 模式**：適合生產環境，提供更好的並發性能和資料持久化
+
 ### 啟動 MLflow 伺服器
 
+#### 方式一：使用腳本（推薦）
+
+**SQLite 模式**：
+```bash
+# Windows
+.\run_sqlite.ps1
+
+# Linux/Mac
+./run_sqlite.sh
+```
+
+**PostgreSQL 模式**：
+```bash
+# Windows
+.\run_postgresql.ps1
+
+# Linux/Mac
+./run_postgresql.sh
+```
+
+#### 方式二：手動使用 docker-compose
+
+**SQLite 模式**：
 ```bash
 # 啟動服務（背景執行）
-docker-compose up -d
+docker-compose --profile sqlite up -d
 
 # 查看日誌
-docker-compose logs -f
+docker-compose --profile sqlite logs -f
 
 # 停止服務
-docker-compose down
+docker-compose --profile sqlite down
+```
+
+**PostgreSQL 模式**：
+```bash
+# 啟動服務（包含建置 Dockerfile）
+docker-compose --profile postgresql up -d --build
+
+# 查看日誌
+docker-compose --profile postgresql logs -f
+
+# 停止服務
+docker-compose --profile postgresql down
 ```
 
 ### 執行訓練
@@ -117,10 +184,23 @@ poetry run python train.py
 ### Docker Compose 配置
 
 MLflow 伺服器配置在 `docker-compose.yml` 中：
+
+**SQLite 模式**：
 - **Port**: 5000
 - **Backend Store**: SQLite (`./mlflow_data/mlflow.db`)
 - **Artifact Root**: `./mlflow_data/artifacts`
 - **Image**: `ghcr.io/mlflow/mlflow:v3.9.0`
+
+**PostgreSQL 模式**：
+- **Port**: 5000
+- **Backend Store**: PostgreSQL (`postgresql://mlflow_user:mlflow_password@db:5432/mlflow_db`)
+- **Artifact Root**: `./mlflow_data/artifacts`
+- **Image**: 自建 Dockerfile（包含 `psycopg2-binary` 驅動）
+- **PostgreSQL Port**: 5432（可選，用於外部工具連線）
+
+### MLflow Server Dockerfile
+
+`mlflow_server/Dockerfile` 基於官方 MLflow 映像檔，額外安裝了 `psycopg2-binary` 以支援 PostgreSQL 連線。首次使用 PostgreSQL 模式時會自動建置此映像檔。
 
 ### MLflow 追蹤 URI
 
@@ -129,6 +209,8 @@ MLflow 伺服器配置在 `docker-compose.yml` 中：
 ```python
 mlflow.set_tracking_uri("http://localhost:5000")
 ```
+
+**注意**：無論使用 SQLite 還是 PostgreSQL 模式，Client 端都透過 HTTP 連接到 MLflow Server，因此 `train.py` 無需修改。
 
 ## 📝 範例程式碼
 
@@ -156,9 +238,20 @@ with mlflow.start_run():
 
 ### MLflow 伺服器無法連接
 
-- 確認 Docker 容器正在運行：`docker-compose ps`
+- 確認 Docker 容器正在運行：
+  - SQLite: `docker-compose --profile sqlite ps`
+  - PostgreSQL: `docker-compose --profile postgresql ps`
 - 檢查端口 5000 是否被占用
-- 查看容器日誌：`docker-compose logs mlflow`
+- 查看容器日誌：
+  - SQLite: `docker-compose --profile sqlite logs mlflow-sqlite`
+  - PostgreSQL: `docker-compose --profile postgresql logs mlflow-postgres`
+
+### PostgreSQL 連線問題
+
+- 確認 PostgreSQL 容器已啟動：`docker ps | grep mlflow_db`
+- 檢查 PostgreSQL 日誌：`docker-compose --profile postgresql logs db`
+- 確認 MLflow Server 映像檔已正確建置（包含 psycopg2-binary）
+- 首次使用需加上 `--build` 參數：`docker-compose --profile postgresql up -d --build`
 
 ### Poetry 安裝失敗
 

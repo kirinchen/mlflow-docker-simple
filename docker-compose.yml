@@ -1,9 +1,27 @@
 version: '3.7'
 
 services:
-  mlflow:
+  # PostgreSQL 資料庫服務
+  db:
+    image: postgres:16
+    container_name: mlflow_db
+    restart: always
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"  # 開出來方便用 DB 工具查看 (Optional)
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # 資料持久化
+    profiles:
+      - postgresql  # 只在 postgresql profile 時啟動
+
+  # MLflow Server with SQLite
+  mlflow-sqlite:
     image: ghcr.io/mlflow/mlflow:v3.9.0
-    container_name: mlflow_server
+    container_name: mlflow_server_sqlite
+    restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
@@ -14,3 +32,32 @@ services:
       --default-artifact-root /mlflow/artifacts
       --host 0.0.0.0
       --port 5000
+    profiles:
+      - sqlite  # 只在 sqlite profile 時啟動
+
+  # MLflow Server with PostgreSQL
+  mlflow-postgres:
+    build: ./mlflow_server  # 改用 build 本地的 Dockerfile
+    container_name: mlflow_server_postgres
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db  # 確保 DB 先啟動
+    environment:
+      # 如果有 S3 需求，之後加在這裡
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL:-}
+    volumes:
+      - ./mlflow_data:/mlflow  # 用來存 Artifacts (檔案)
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://root:root@db:5432/postgres
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    profiles:
+      - postgresql  # 只在 postgresql profile 時啟動
+
+volumes:
+  postgres_data:
